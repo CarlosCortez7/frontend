@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { collection, addDoc } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { db, storage } from "../services/firebase";
+import { db } from "../services/firebase";
 import {
   getRegiones,
   getProvinciasByRegion,
@@ -11,6 +10,8 @@ import {
 } from "../services/filtroService";
 
 export default function PublicarPropiedad() {
+  const [uploadcareReady, setUploadcareReady] = useState(false);
+
   const [regiones, setRegiones] = useState([]);
   const [provincias, setProvincias] = useState([]);
   const [comunas, setComunas] = useState([]);
@@ -21,6 +22,7 @@ export default function PublicarPropiedad() {
     titulo: "",
     descripcion: "",
     precio: "",
+    valor_uf: "",
     region: "",
     provincia: "",
     comuna: "",
@@ -29,13 +31,26 @@ export default function PublicarPropiedad() {
     superficie_construida: "",
     cantidad_dormitorios: "",
     cantidad_banos: "",
+    cantidad_pisos: "",
     piscina: false,
+    quincho: false,
+    jardin: false,
     estacionamientos: "",
+    fecha_publicacion: "",
+    imagenes: [],
   });
 
-  const [imagenesFiles, setImagenesFiles] = useState([]);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [subiendo, setSubiendo] = useState(false);
+  //carga script de Uploadcare
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://ucarecdn.com/libs/widget/3.x/uploadcare.full.min.js";
+    script.async = true;
+    script.onload = () => {
+      window.UPLOADCARE_PUBLIC_KEY = "d6568973a0dbc3595f19";
+      setUploadcareReady(true);
+    };
+    document.body.appendChild(script);
+  }, []);
 
   useEffect(() => {
     async function cargarDatos() {
@@ -52,7 +67,7 @@ export default function PublicarPropiedad() {
       } else {
         setProvincias([]);
       }
-      setForm(f => ({ ...f, provincia: "", comuna: "", sector: "" }));
+      setForm((f) => ({ ...f, provincia: "", comuna: "", sector: "" }));
       setComunas([]);
       setSectores([]);
     }
@@ -66,7 +81,7 @@ export default function PublicarPropiedad() {
       } else {
         setComunas([]);
       }
-      setForm(f => ({ ...f, comuna: "", sector: "" }));
+      setForm((f) => ({ ...f, comuna: "", sector: "" }));
       setSectores([]);
     }
     cargarComunas();
@@ -79,89 +94,103 @@ export default function PublicarPropiedad() {
       } else {
         setSectores([]);
       }
-      setForm(f => ({ ...f, sector: "" }));
+      setForm((f) => ({ ...f, sector: "" }));
     }
     cargarSectores();
   }, [form.comuna]);
 
-  function handleChange(e) {
+  const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    if (type === "checkbox") {
-      setForm(f => ({ ...f, [name]: checked }));
-    } else {
-      setForm(f => ({ ...f, [name]: value }));
-    }
-  }
+    setForm((f) => ({
+      ...f,
+      [name]: type === "checkbox" ? checked : value,
+    }));
+  };
 
-  function handleFileChange(e) {
-    setImagenesFiles(Array.from(e.target.files));
-  }
-
-  async function subirImagenes() {
-    const urls = [];
-    setSubiendo(true);
-    for (let i = 0; i < imagenesFiles.length; i++) {
-      const file = imagenesFiles[i];
-      const storageRef = ref(storage, `propiedades/${Date.now()}_${file.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
-
-      await new Promise((resolve, reject) => {
-        uploadTask.on(
-          "state_changed",
-          snapshot => {
-            const progreso = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            setUploadProgress(progreso.toFixed(0));
-          },
-          error => {
-            alert("Error al subir imagen: " + error.message);
-            reject(error);
-          },
-          async () => {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            urls.push(downloadURL);
-            resolve();
-          }
-        );
-      });
-    }
-    setSubiendo(false);
-    setUploadProgress(0);
-    return urls;
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (imagenesFiles.length === 0) {
-      alert("Debe seleccionar al menos una imagen.");
+  const openUploadWidget = () => {
+    if (!uploadcareReady || !window.uploadcare) {
+      alert("El widget aún no está listo.");
       return;
     }
 
-    try {
-      const urls = await subirImagenes();
+    const dialog = window.uploadcare.openDialog(null, {
+      publicKey: "d6568973a0dbc3595f19",
+      multiple: true,
+      imagesOnly: true,
+    });
 
+    dialog.done((fileGroup) => {
+      fileGroup.files().forEach((filePromise) => {
+        filePromise.done((fileInfo) => {
+          const url = fileInfo.cdnUrl;
+          setForm((prev) => ({
+            ...prev,
+            imagenes: [...prev.imagenes, url],
+          }));
+        });
+      });
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (form.titulo.trim().length < 3)
+      return alert("El título debe tener al menos 3 caracteres.");
+    if (form.descripcion.trim().length < 10)
+      return alert("La descripción debe tener al menos 10 caracteres.");
+    if (!form.precio || isNaN(form.precio) || Number(form.precio) <= 0)
+      return alert("El precio debe ser un número positivo.");
+    if (!form.valor_uf || isNaN(form.valor_uf) || Number(form.valor_uf) <= 0)
+      return alert("El valor en UF debe ser un número positivo.");
+    if (!form.superficie_construida || isNaN(form.superficie_construida) || Number(form.superficie_construida) <= 0)
+      return alert("La superficie construida debe ser positiva.");
+    if (form.cantidad_dormitorios === "" || isNaN(form.cantidad_dormitorios) || Number(form.cantidad_dormitorios) < 0)
+      return alert("Los dormitorios deben ser un número positivo o cero.");
+    if (form.cantidad_banos === "" || isNaN(form.cantidad_banos) || Number(form.cantidad_banos) < 0)
+      return alert("Los baños deben ser un número positivo o cero.");
+    if (form.estacionamientos === "" || isNaN(form.estacionamientos) || Number(form.estacionamientos) < 0)
+      return alert("Los estacionamientos deben ser un número positivo o cero.");
+    if (form.cantidad_pisos === "" || isNaN(form.cantidad_pisos) || Number(form.cantidad_pisos) < 0)
+      return alert("La cantidad de pisos debe ser un número positivo o cero.");
+    if (!form.region || !form.provincia || !form.comuna || !form.sector)
+      return alert("Debes seleccionar región, provincia, comuna y sector.");
+    if (!form.tipo) return alert("Selecciona un tipo de propiedad.");
+    
+    if (form.fecha_publicacion) {
+      const fechaPublicacion = new Date(form.fecha_publicacion);
+      const hoy = new Date();
+      
+      if (fechaPublicacion > hoy) {
+        return alert("La fecha de publicación no puede ser en el futuro.");
+      }
+    }
+    
+    if (form.imagenes.length === 0) {
+      const continuar = confirm("¿Deseas continuar sin imágenes?");
+      if (!continuar) return;
+    }
+
+    try {
       await addDoc(collection(db, "propiedades"), {
-        titulo: form.titulo,
-        descripcion: form.descripcion,
+        ...form,
         precio: Number(form.precio),
-        idregion: form.region,
-        idprovincias: form.provincia,
-        idcomunas: form.comuna,
-        idsectores: form.sector,
-        idtipo: form.tipo,
+        valor_uf: Number(form.valor_uf),
         superficie_construida: Number(form.superficie_construida),
         cantidad_dormitorios: Number(form.cantidad_dormitorios),
         cantidad_banos: Number(form.cantidad_banos),
-        piscina: form.piscina,
+        cantidad_pisos: Number(form.cantidad_pisos),
         estacionamientos: Number(form.estacionamientos),
-        imagenes: urls,
-        fecha_publicacion: new Date(),
+        fecha_publicacion: form.fecha_publicacion ? new Date(form.fecha_publicacion) : new Date(),
       });
 
       alert("Propiedad publicada con éxito!");
+
       setForm({
         titulo: "",
         descripcion: "",
         precio: "",
+        valor_uf: "",
         region: "",
         provincia: "",
         comuna: "",
@@ -170,20 +199,23 @@ export default function PublicarPropiedad() {
         superficie_construida: "",
         cantidad_dormitorios: "",
         cantidad_banos: "",
+        cantidad_pisos: "",
         piscina: false,
+        quincho: false,
+        jardin: false,
         estacionamientos: "",
+        fecha_publicacion: "",
+        imagenes: [],
       });
-      setImagenesFiles([]);
-    } catch (error) {
-      alert("Error al publicar la propiedad: " + error.message);
+    } catch (err) {
+      alert("Error al publicar la propiedad: " + err.message);
     }
-  }
+  };
 
   return (
     <div className="container mt-4">
       <h2>Publicar Propiedad</h2>
       <form onSubmit={handleSubmit}>
-        {}
         <div className="mb-3">
           <label className="form-label">Título</label>
           <input
@@ -207,19 +239,35 @@ export default function PublicarPropiedad() {
           />
         </div>
 
-        <div className="mb-3">
-          <label className="form-label">Precio</label>
-          <input
-            type="number"
-            name="precio"
-            className="form-control"
-            value={form.precio}
-            onChange={handleChange}
-            required
-          />
+        <div className="row mb-3">
+          <div className="col-md-6">
+            <label className="form-label">Precio (CLP)</label>
+            <input
+              type="number"
+              name="precio"
+              className="form-control"
+              value={form.precio}
+              onChange={handleChange}
+              min="0"
+              step="1"
+              required
+            />
+          </div>
+          <div className="col-md-6">
+            <label className="form-label">Valor en UF</label>
+            <input
+              type="number"
+              name="valor_uf"
+              className="form-control"
+              value={form.valor_uf}
+              onChange={handleChange}
+              min="0"
+              step="0.01"
+              required
+            />
+          </div>
         </div>
 
-        {}
         <div className="row g-3 mb-3">
           <div className="col-md-3">
             <label className="form-label">Región</label>
@@ -238,7 +286,6 @@ export default function PublicarPropiedad() {
               ))}
             </select>
           </div>
-
           <div className="col-md-3">
             <label className="form-label">Provincia</label>
             <select
@@ -257,7 +304,6 @@ export default function PublicarPropiedad() {
               ))}
             </select>
           </div>
-
           <div className="col-md-3">
             <label className="form-label">Comuna</label>
             <select
@@ -276,7 +322,6 @@ export default function PublicarPropiedad() {
               ))}
             </select>
           </div>
-
           <div className="col-md-3">
             <label className="form-label">Sector</label>
             <select
@@ -297,7 +342,6 @@ export default function PublicarPropiedad() {
           </div>
         </div>
 
-        {}
         <div className="mb-3">
           <label className="form-label">Tipo de Propiedad</label>
           <select
@@ -316,7 +360,6 @@ export default function PublicarPropiedad() {
           </select>
         </div>
 
-        {}
         <div className="mb-3">
           <label className="form-label">Superficie Construida (m²)</label>
           <input
@@ -325,46 +368,113 @@ export default function PublicarPropiedad() {
             className="form-control"
             value={form.superficie_construida}
             onChange={handleChange}
+            min="0"
+            step="1"
+            required
+          />
+        </div>
+
+        <div className="row mb-3">
+          <div className="col-md-6">
+            <label className="form-label">Cantidad de Dormitorios</label>
+            <input
+              type="number"
+              name="cantidad_dormitorios"
+              className="form-control"
+              value={form.cantidad_dormitorios}
+              onChange={handleChange}
+              min="0"
+              step="1"
+              required
+            />
+          </div>
+          <div className="col-md-6">
+            <label className="form-label">Cantidad de Baños</label>
+            <input
+              type="number"
+              name="cantidad_banos"
+              className="form-control"
+              value={form.cantidad_banos}
+              onChange={handleChange}
+              min="0"
+              step="1"
+              required
+            />
+          </div>
+        </div>
+
+        <div className="mb-3">
+          <label className="form-label">Cantidad de Pisos</label>
+          <input
+            type="number"
+            name="cantidad_pisos"
+            className="form-control"
+            value={form.cantidad_pisos}
+            onChange={handleChange}
+            min="0"
+            step="1"
             required
           />
         </div>
 
         <div className="mb-3">
-          <label className="form-label">Cantidad de Dormitorios</label>
+          <label className="form-label">Fecha de Publicación</label>
           <input
-            type="number"
-            name="cantidad_dormitorios"
+            type="date"
+            name="fecha_publicacion"
             className="form-control"
-            value={form.cantidad_dormitorios}
+            value={form.fecha_publicacion}
             onChange={handleChange}
-            required
+            max={new Date().toISOString().split('T')[0]}
           />
         </div>
 
-        <div className="mb-3">
-          <label className="form-label">Cantidad de Baños</label>
-          <input
-            type="number"
-            name="cantidad_banos"
-            className="form-control"
-            value={form.cantidad_banos}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-check mb-3">
-          <input
-            type="checkbox"
-            name="piscina"
-            className="form-check-input"
-            checked={form.piscina}
-            onChange={handleChange}
-            id="piscinaCheck"
-          />
-          <label className="form-check-label" htmlFor="piscinaCheck">
-            Piscina
-          </label>
+        <div className="row mb-3">
+          <div className="col-md-4">
+            <div className="form-check">
+              <input
+                type="checkbox"
+                name="piscina"
+                className="form-check-input"
+                checked={form.piscina}
+                onChange={handleChange}
+                id="piscinaCheck"
+              />
+              <label className="form-check-label" htmlFor="piscinaCheck">
+                Piscina
+              </label>
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="form-check">
+              <input
+                type="checkbox"
+                name="quincho"
+                className="form-check-input"
+                checked={form.quincho}
+                onChange={handleChange}
+                id="quinchoCheck"
+              />
+              <label className="form-check-label" htmlFor="quinchoCheck">
+                Quincho
+              </label>
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="form-check">
+              <input
+                type="checkbox"
+                name="jardin"
+                className="form-check-input"
+                checked={form.jardin}
+                onChange={handleChange}
+                id="jardinCheck"
+              />
+              <label className="form-check-label" htmlFor="jardinCheck">
+                Jardín
+              </label>
+            </div>
+          </div>
         </div>
 
         <div className="mb-3">
@@ -375,41 +485,39 @@ export default function PublicarPropiedad() {
             className="form-control"
             value={form.estacionamientos}
             onChange={handleChange}
+            min="0"
+            step="1"
             required
           />
         </div>
 
-        {}
         <div className="mb-3">
-          <label className="form-label">Imágenes (puede seleccionar varias)</label>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            className="form-control"
-            onChange={handleFileChange}
-            disabled={subiendo}
-            required
-          />
-          {subiendo && (
-            <div className="mt-2">
-              <small>Subiendo imágenes: {uploadProgress}%</small>
-              <div className="progress">
-                <div
-                  className="progress-bar progress-bar-striped progress-bar-animated"
-                  role="progressbar"
-                  style={{ width: `${uploadProgress}%` }}
-                  aria-valuenow={uploadProgress}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
+          <label className="form-label">Imágenes</label>
+          <button
+            type="button"
+            className="btn btn-outline-secondary w-100"
+            onClick={openUploadWidget}
+            disabled={!uploadcareReady}
+          >
+            Subir imágenes
+          </button>
+          {form.imagenes.length > 0 && (
+            <div className="mt-2 d-flex flex-wrap">
+              {form.imagenes.map((url, i) => (
+                <img
+                  key={i}
+                  src={url}
+                  alt={`img-${i}`}
+                  className="me-2 mb-2"
+                  style={{ width: "100px", height: "100px", objectFit: "cover" }}
                 />
-              </div>
+              ))}
             </div>
           )}
         </div>
 
-        <button type="submit" className="btn btn-primary" disabled={subiendo}>
-          {subiendo ? "Publicando..." : "Publicar"}
+        <button type="submit" className="btn btn-primary">
+          Publicar
         </button>
       </form>
     </div>
